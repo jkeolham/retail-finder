@@ -1,6 +1,6 @@
 {
-  "name": "우리집 재고 찾기 - 다이소 & 올리브영",
-  "short_name": "재고찾기",
+  "name": "다이소 올영 상품 찾기",
+  "short_name": "다이소올영",
   "description": "내 주변 다이소와 올리브영 매장의 실시간 상품 및 재고 검색",
   "start_url": "./index.html",
   "display": "standalone",
