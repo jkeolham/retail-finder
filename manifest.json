@@ -1,0 +1,18 @@
+{
+  "name": "우리집 재고 찾기 - 다이소 & 올리브영",
+  "short_name": "재고찾기",
+  "description": "내 주변 다이소와 올리브영 매장의 실시간 상품 및 재고 검색",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#3b82f6",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "./icons/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
