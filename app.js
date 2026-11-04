@@ -852,7 +852,49 @@ async function callDaisoInventory(query, storeQuery, geoCoords) {
     args.latitude = geoCoords.lat;
     args.longitude = geoCoords.lng;
   }
-  return await mcp.callTool('check_inventory', args);
+
+  // check_inventory와 search_products를 병렬로 호출하여 가격 조회 지연 최소화
+  const [invResult, searchResult] = await Promise.allSettled([
+    mcp.callTool('check_inventory', args),
+    mcp.callTool('search_products', { service: 'daiso', query: query })
+  ]);
+
+  if (invResult.status !== 'fulfilled') {
+    throw invResult.reason;
+  }
+
+  const res = invResult.value;
+  if (!res || res.error) return res;
+
+  // 가격 매칭 및 주입
+  if (res.selectedProduct) {
+    if (searchResult.status === 'fulfilled' && searchResult.value?.products) {
+      const prods = searchResult.value.products;
+      const matched = prods.find((p) => p.id === res.selectedProduct.id || p.name === res.selectedProduct.name);
+      if (matched && matched.price) {
+        res.selectedProduct.price = matched.price;
+      }
+    }
+
+    // search_products에서 못 찾았을 경우 get_product_details(daiso/price)로 2차 보완
+    if (!res.selectedProduct.price && res.selectedProduct.id) {
+      try {
+        const priceDetails = await mcp.callTool('get_product_details', {
+          service: 'daiso',
+          operation: 'price',
+          productId: res.selectedProduct.id
+        });
+        const priceVal = priceDetails?.currentPrice || priceDetails?.price;
+        if (priceVal) {
+          res.selectedProduct.price = priceVal;
+        }
+      } catch (e) {
+        console.warn('다이소 get_product_details 가격 조회 생략:', e);
+      }
+    }
+  }
+
+  return res;
 }
 
 // 올리브영 스마트 조회
@@ -1090,11 +1132,20 @@ function renderDaisoSection(res) {
       ${
         selectedProduct.name
           ? `
-        <div class="flex items-center gap-3 my-3 p-2.5 bg-gray-50 rounded-xl">
-          ${selectedProduct.imageUrl ? `<img src="${selectedProduct.imageUrl}" class="w-14 h-14 object-cover rounded-lg border border-gray-200" alt="${selectedProduct.name}"/>` : ''}
-          <div class="flex-1 min-w-0">
-            <h4 class="text-sm font-bold text-gray-900 truncate">${selectedProduct.name}</h4>
-            <p class="text-xs text-gray-500 mt-0.5">${headline}</p>
+        <div class="my-3 p-3 bg-gradient-to-r from-red-50/40 via-gray-50 to-gray-50 rounded-2xl border border-red-100/70 shadow-xs">
+          <div class="flex items-center gap-3">
+            ${selectedProduct.imageUrl ? `<img src="${selectedProduct.imageUrl}" class="w-16 h-16 object-cover rounded-xl border border-gray-200 shrink-0 shadow-2xs" alt="${escapeHtml(selectedProduct.name)}"/>` : ''}
+            <div class="flex-1 min-w-0">
+              <div class="flex items-start justify-between gap-2">
+                <h4 class="text-sm font-bold text-gray-900 leading-snug line-clamp-2">${escapeHtml(selectedProduct.name)}</h4>
+                ${
+                  selectedProduct.price
+                    ? `<span class="shrink-0 text-sm sm:text-base font-black text-red-600 bg-red-50 px-2 py-0.5 rounded-lg border border-red-200/80">${Number(selectedProduct.price).toLocaleString()}원</span>`
+                    : ''
+                }
+              </div>
+              <p class="text-xs text-gray-500 mt-1 line-clamp-2 leading-relaxed">${escapeHtml(headline)}</p>
+            </div>
           </div>
         </div>
       `
@@ -1200,8 +1251,10 @@ function renderOliveSection(res) {
                 .slice(0, 3)
                 .map((p, idx) => {
                   const stores = p.storeInventory?.stores || [];
-                  const price = p.priceToPay ? p.priceToPay.toLocaleString() + '원' : '';
-                  const origPrice = p.originalPrice ? p.originalPrice.toLocaleString() + '원' : '';
+                  const priceVal = p.priceToPay || p.price || p.salePrice || p.currentPrice;
+                  const price = priceVal ? Number(priceVal).toLocaleString() + '원' : '';
+                  const origPriceVal = p.originalPrice || p.regularPrice;
+                  const origPrice = origPriceVal ? Number(origPriceVal).toLocaleString() + '원' : '';
                   const inStockStores = stores.filter((s) => s.o2oStockFlag || (s.o2oRemainQuantity && s.o2oRemainQuantity > 0));
 
                   return `
@@ -1290,17 +1343,18 @@ function renderConvenienceSection(res) {
   const stores = res.stores || [];
   const inStockStores = stores.filter((s) => s.quantity > 0);
   const prodName = res.productName || state.currentQuery;
-  const prodPrice = res.productPrice ? Number(res.productPrice).toLocaleString() + '원' : '';
+  const priceVal = res.productPrice || res.product?.price || res.price || (res.productCandidates?.[0]?.price) || null;
+  const prodPrice = priceVal ? Number(priceVal).toLocaleString() + '원' : '';
 
   return `
     <div id="${service}-section" class="result-section mb-6 bg-white rounded-2xl p-4 shadow-sm border ${brandColor.border}" data-service="${service}">
       <div class="flex items-center justify-between pb-3 border-b border-gray-100">
-        <div class="flex items-center gap-2">
-          <span class="px-2 py-0.5 text-xs font-bold ${brandColor.bg} text-white rounded-md">${brandName}</span>
-          <span class="text-xs text-gray-500 font-medium truncate max-w-[150px]">${escapeHtml(prodName)}</span>
+        <div class="flex items-center gap-2 min-w-0">
+          <span class="px-2 py-0.5 text-xs font-bold ${brandColor.bg} text-white rounded-md shrink-0">${brandName}</span>
+          <span class="text-xs text-gray-700 font-bold truncate max-w-[130px] sm:max-w-[180px]">${escapeHtml(prodName)}</span>
+          ${prodPrice ? `<span class="shrink-0 text-xs font-black text-gray-900 bg-gray-100 px-2 py-0.5 rounded-lg border border-gray-200">${prodPrice}</span>` : ''}
         </div>
-        <div class="flex items-center gap-2 text-xs">
-          ${prodPrice ? `<span class="font-bold text-gray-800">${prodPrice}</span>` : ''}
+        <div class="flex items-center gap-1.5 text-xs shrink-0">
           <span class="text-[11px] font-bold ${inStockStores.length > 0 ? brandColor.text : 'text-gray-400'}">
             ${inStockStores.length > 0 ? `${inStockStores.length}곳 보유` : '재고 없음'}
           </span>
