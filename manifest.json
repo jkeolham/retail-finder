@@ -1,7 +1,7 @@
 {
   "name": "주변 매장 상품 찾기",
   "short_name": "주변매장찾기",
-  "description": "내 주변 다이소, 올리브영, 편의점 4사 매장의 실시간 상품 및 재고 검색",
+  "description": "내 주변 다이소, 올리브영, 편의점 4사 매장 재고 및 쿠팡 로켓배송 검색",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#f8fafc",

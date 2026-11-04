@@ -868,6 +868,9 @@ function renderResults(resMap) {
     html += renderConvenienceSection(resMap.emart24);
   }
 
+  // 쿠팡 로켓배송 카드
+  html += renderCoupangSection(state.currentQuery);
+
   resultsContainer.innerHTML = html;
   filterSections(state.currentTab);
 }
@@ -1177,6 +1180,67 @@ function renderConvenienceSection(res) {
                 })
                 .join('')
         }
+      </div>
+    </div>
+  `;
+}
+
+// ----------------- Coupang Rocket Section -----------------
+function renderCoupangSection(query) {
+  if (!query) return '';
+
+  const encodedQuery = encodeURIComponent(query);
+  const rocketAllUrl = `https://m.coupang.com/nm/search?q=${encodedQuery}&filter=ROCKET_ALL`;
+  const rocketFreshUrl = `https://m.coupang.com/nm/search?q=${encodedQuery}&filter=ROCKET_FRESH`;
+  const normalSearchUrl = `https://m.coupang.com/nm/search?q=${encodedQuery}`;
+  const appSchemeUrl = `coupang://search?q=${encodedQuery}`;
+
+  return `
+    <div id="coupang-section" class="result-section mb-6 bg-white rounded-2xl p-4 shadow-sm border border-sky-100" data-service="coupang">
+      <!-- 헤더 -->
+      <div class="flex items-center justify-between pb-3 border-b border-gray-100">
+        <div class="flex items-center gap-2">
+          <span class="px-2 py-0.5 text-xs font-extrabold bg-[#0074E9] text-white rounded-md tracking-tight">쿠팡</span>
+          <span class="text-xs text-red-600 font-bold bg-red-50 px-1.5 py-0.5 rounded border border-red-200/60">🚀 로켓배송</span>
+        </div>
+        <span class="text-[11px] text-gray-400 font-medium">오늘 주문 ➔ 내일 새벽 도착</span>
+      </div>
+
+      <!-- 본문 안내 -->
+      <div class="mt-3.5 bg-gradient-to-br from-blue-50/80 via-white to-sky-50/50 rounded-xl p-3 border border-blue-100/70">
+        <div class="flex items-start gap-2.5">
+          <div class="w-8 h-8 rounded-lg bg-[#0074E9] flex items-center justify-center text-white text-base shrink-0 shadow-xs">
+            🚀
+          </div>
+          <div class="flex-1 min-w-0">
+            <h4 class="text-xs font-bold text-gray-900 leading-snug">
+              '<span class="text-blue-600">${escapeHtml(query)}</span>' 쿠팡 로켓배송 실시간 조회
+            </h4>
+            <p class="text-[11px] text-gray-500 mt-1 leading-relaxed">
+              주변 오프라인 매장에 재고가 없거나 품절일 때, 쿠팡 로켓배송으로 가장 빠르고 저렴하게 받아보세요.
+            </p>
+          </div>
+        </div>
+
+        <!-- 액션 버튼 그리드 -->
+        <div class="grid grid-cols-2 gap-2 mt-3 pt-2.5 border-t border-blue-100/60 text-xs">
+          <a href="${rocketAllUrl}" target="_blank"
+             class="flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg bg-[#0074E9] hover:bg-blue-600 text-white font-bold text-[11px] shadow-xs transition text-center">
+            <span>🚀 로켓배송 최저가</span>
+          </a>
+          <a href="${appSchemeUrl}"
+             class="flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-800 font-bold text-[11px] border border-gray-200 transition text-center">
+            <span>📱 쿠팡 앱으로 열기</span>
+          </a>
+          <a href="${rocketFreshUrl}" target="_blank"
+             class="flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-semibold text-[11px] border border-emerald-200 transition text-center">
+            <span>🥦 로켓프레시 (신선)</span>
+          </a>
+          <a href="${normalSearchUrl}" target="_blank"
+             class="flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg bg-gray-50 hover:bg-gray-100 text-gray-600 font-medium text-[11px] border border-gray-200 transition text-center">
+            <span>🔍 쿠팡 전체 검색</span>
+          </a>
+        </div>
       </div>
     </div>
   `;

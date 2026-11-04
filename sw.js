@@ -1,5 +1,5 @@
-// sw.js - Service Worker for Retail PWA (v7: 4 Convenience Stores Integration)
-const CACHE_NAME = 'retail-pwa-v7';
+// sw.js - Service Worker for Retail PWA (v8: Coupang Rocket Integration)
+const CACHE_NAME = 'retail-pwa-v8';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
