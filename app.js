@@ -137,9 +137,7 @@ const locationInput = document.getElementById('location-input');
 const gpsBtn = document.getElementById('gps-btn');
 const gpsStatus = document.getElementById('gps-status');
 
-const tabAll = document.getElementById('tab-all');
-const tabDaiso = document.getElementById('tab-daiso');
-const tabOlive = document.getElementById('tab-olive');
+const tabButtons = document.querySelectorAll('.tab-chip');
 
 const loadingEl = document.getElementById('loading-indicator');
 const resultsContainer = document.getElementById('results-container');
@@ -210,35 +208,40 @@ savePinBtn.addEventListener('click', () => {
 // ----------------- Tabs -----------------
 function setTab(tab) {
   state.currentTab = tab;
-  [tabAll, tabDaiso, tabOlive].forEach((el) => {
-    el.classList.remove('bg-blue-600', 'text-white', 'shadow-sm');
-    el.classList.add('bg-gray-100', 'text-gray-600');
+  tabButtons.forEach((btn) => {
+    if (btn.dataset.tab === tab) {
+      btn.className = 'tab-chip px-3 py-1.5 rounded-xl bg-blue-600 text-white shadow-sm shrink-0 transition';
+    } else {
+      btn.className = 'tab-chip px-3 py-1.5 rounded-xl bg-white text-gray-600 border border-gray-200 shrink-0 hover:bg-gray-50 transition';
+    }
   });
 
-  const activeEl = tab === 'all' ? tabAll : tab === 'daiso' ? tabDaiso : tabOlive;
-  activeEl.classList.remove('bg-gray-100', 'text-gray-600');
-  activeEl.classList.add('bg-blue-600', 'text-white', 'shadow-sm');
-
-  // 화면 카드 필터링
-  const daisoSection = document.getElementById('daiso-section');
-  const oliveSection = document.getElementById('olive-section');
-  if (daisoSection && oliveSection) {
-    if (tab === 'all') {
-      daisoSection.style.display = 'block';
-      oliveSection.style.display = 'block';
-    } else if (tab === 'daiso') {
-      daisoSection.style.display = 'block';
-      oliveSection.style.display = 'none';
-    } else {
-      daisoSection.style.display = 'none';
-      oliveSection.style.display = 'block';
-    }
-  }
+  filterSections(tab);
 }
 
-tabAll.addEventListener('click', () => setTab('all'));
-tabDaiso.addEventListener('click', () => setTab('daiso'));
-tabOlive.addEventListener('click', () => setTab('oliveyoung'));
+function filterSections(tab) {
+  const allSections = document.querySelectorAll('.result-section');
+  if (!allSections.length) return;
+
+  allSections.forEach((sec) => {
+    const secType = sec.dataset.service;
+    const isCvs = ['gs25', 'cu', 'seveneleven', 'emart24'].includes(secType);
+
+    if (tab === 'all') {
+      sec.style.display = 'block';
+    } else if (tab === 'cvs') {
+      sec.style.display = isCvs ? 'block' : 'none';
+    } else {
+      sec.style.display = secType === tab ? 'block' : 'none';
+    }
+  });
+}
+
+tabButtons.forEach((btn) => {
+  btn.addEventListener('click', () => {
+    setTab(btn.dataset.tab);
+  });
+});
 
 // ----------------- Reverse Geocoding (좌표 ➔ 동 이름 정밀 변환) -----------------
 async function getDongFromCoordinates(lat, lng) {
@@ -571,22 +574,37 @@ searchForm.addEventListener('submit', async (e) => {
   loadingEl.classList.remove('hidden');
 
   try {
-    const promises = [];
-    if (state.currentTab === 'all' || state.currentTab === 'daiso') {
-      promises.push(fetchDaiso(query, location, state.geoCoords));
-    } else {
-      promises.push(Promise.resolve(null));
-    }
+    const activeTab = state.currentTab;
+    const shouldFetchDaiso = activeTab === 'all' || activeTab === 'daiso';
+    const shouldFetchOlive = activeTab === 'all' || activeTab === 'oliveyoung';
+    const shouldFetchGs25 = activeTab === 'all' || activeTab === 'cvs' || activeTab === 'gs25';
+    const shouldFetchCu = activeTab === 'all' || activeTab === 'cvs' || activeTab === 'cu';
+    const shouldFetchSeven = activeTab === 'all' || activeTab === 'cvs' || activeTab === 'seveneleven';
+    const shouldFetchEmart24 = activeTab === 'all' || activeTab === 'cvs' || activeTab === 'emart24';
 
-    if (state.currentTab === 'all' || state.currentTab === 'oliveyoung') {
-      promises.push(fetchOliveyoung(query, location, state.geoCoords));
-    } else {
-      promises.push(Promise.resolve(null));
-    }
+    const tasks = [
+      shouldFetchDaiso ? fetchDaiso(query, location, state.geoCoords) : Promise.resolve(null),
+      shouldFetchOlive ? fetchOliveyoung(query, location, state.geoCoords) : Promise.resolve(null),
+      shouldFetchGs25 ? fetchConvenienceStore('gs25', query, location, state.geoCoords) : Promise.resolve(null),
+      shouldFetchCu ? fetchConvenienceStore('cu', query, location, state.geoCoords) : Promise.resolve(null),
+      shouldFetchSeven ? fetchConvenienceStore('seveneleven', query, location, state.geoCoords) : Promise.resolve(null),
+      shouldFetchEmart24 ? fetchConvenienceStore('emart24', query, location, state.geoCoords) : Promise.resolve(null)
+    ];
 
-    const [daisoRes, oliveRes] = await Promise.all(promises);
+    const results = await Promise.allSettled(tasks);
+    const [daisoRes, oliveRes, gs25Res, cuRes, sevenRes, emart24Res] = results.map((r) =>
+      r.status === 'fulfilled' ? r.value : { error: r.reason?.message || '조회 실패' }
+    );
+
     loadingEl.classList.add('hidden');
-    renderResults(daisoRes, oliveRes);
+    renderResults({
+      daiso: daisoRes,
+      olive: oliveRes,
+      gs25: gs25Res,
+      cu: cuRes,
+      seven: sevenRes,
+      emart24: emart24Res
+    });
   } catch (err) {
     loadingEl.classList.add('hidden');
     resultsContainer.innerHTML = `
@@ -721,49 +739,144 @@ async function callOliveyoungInventory(keyword, storeKeyword, geoCoords) {
   return await mcp.callTool('check_inventory', args);
 }
 
+// 편의점 스마트 조회 (GS25, CU, 세븐일레븐, 이마트24)
+async function fetchConvenienceStore(service, query, location, geoCoords) {
+  const storeKeyword = location && !location.includes('GPS') ? location.split(' ')[0] : '과천';
+  const brandNames = {
+    gs25: 'GS25',
+    cu: 'CU',
+    seveneleven: '세븐일레븐',
+    emart24: '이마트24'
+  };
+  const brandColors = {
+    gs25: { bg: 'bg-blue-600', text: 'text-blue-600', border: 'border-blue-100', badgeBg: 'bg-blue-50', badgeBorder: 'border-blue-200' },
+    cu: { bg: 'bg-purple-600', text: 'text-purple-600', border: 'border-purple-100', badgeBg: 'bg-purple-50', badgeBorder: 'border-purple-200' },
+    seveneleven: { bg: 'bg-emerald-600', text: 'text-emerald-600', border: 'border-emerald-100', badgeBg: 'bg-emerald-50', badgeBorder: 'border-emerald-200' },
+    emart24: { bg: 'bg-amber-500', text: 'text-amber-600', border: 'border-amber-100', badgeBg: 'bg-amber-50', badgeBorder: 'border-amber-200' }
+  };
+
+  const brandName = brandNames[service] || service;
+  const brandColor = brandColors[service] || brandColors.gs25;
+
+  const args = {
+    service: service,
+    keyword: query,
+    storeKeyword: storeKeyword
+  };
+  if (geoCoords) {
+    args.latitude = geoCoords.lat;
+    args.longitude = geoCoords.lng;
+  }
+
+  try {
+    const res = await mcp.callTool('check_inventory', args);
+    if (res.error) {
+      return {
+        service,
+        brandName,
+        brandColor,
+        error: res.error
+      };
+    }
+
+    let rawStores = res.inventory?.stores || res.stores || [];
+    let prodName = res.product?.name || res.keyword || query;
+    let prodPrice = res.product?.price || null;
+
+    if (service === 'emart24' && res.productCandidates?.length > 0) {
+      const topProd = res.productCandidates[0];
+      prodName = topProd.goodsName || prodName;
+      prodPrice = topProd.viewPrice || topProd.originPrice || prodPrice;
+    }
+
+    const stores = rawStores.map((s) => {
+      const qty = s.realStockQuantity ?? s.stockQuantity ?? s.bizQty ?? s.quantity ?? 0;
+      const lat = s.latitude ?? s.lat;
+      const lng = s.longitude ?? s.lng;
+      let dist = s.distance;
+      if (dist == null && s.distanceM != null) {
+        dist = (s.distanceM / 1000).toFixed(1);
+      }
+
+      return {
+        storeName: s.storeName,
+        address: s.address,
+        phone: s.phone,
+        lat: lat,
+        lng: lng,
+        distance: dist,
+        quantity: qty
+      };
+    });
+
+    return {
+      service,
+      brandName,
+      brandColor,
+      productName: prodName,
+      productPrice: prodPrice,
+      stores: stores
+    };
+  } catch (e) {
+    console.error(`${brandName} 조회 실패:`, e);
+    return {
+      service,
+      brandName,
+      brandColor,
+      error: { message: e.message || '일시적인 네트워크 지연' }
+    };
+  }
+}
+
 // ----------------- Render Results -----------------
-function renderResults(daiso, olive) {
+function renderResults(resMap) {
   let html = '';
 
   // 기준 동네 안내 헤더
   const locDisplay = state.currentLocation || '내 위치';
   html += `
-    <div class="p-3 bg-white rounded-2xl border border-blue-100 shadow-sm flex items-center justify-between text-xs mb-2">
+    <div class="p-3 bg-white rounded-2xl border border-blue-100 shadow-sm flex items-center justify-between text-xs mb-3">
       <div class="flex items-center gap-1.5 text-gray-900 font-bold">
         <span class="text-base">📍</span>
         <span>기준 동네: <b class="text-blue-600">${escapeHtml(locDisplay)}</b></span>
       </div>
-      <span class="text-[11px] text-gray-400 font-medium">반경 매장 재고</span>
+      <span class="text-[11px] text-gray-400 font-medium">실시간 매장 재고</span>
     </div>
   `;
 
   // 다이소 카드
-  if (daiso) {
-    html += renderDaisoSection(daiso);
+  if (resMap.daiso) {
+    html += renderDaisoSection(resMap.daiso);
   }
 
   // 올리브영 카드
-  if (olive) {
-    html += renderOliveSection(olive);
+  if (resMap.olive) {
+    html += renderOliveSection(resMap.olive);
   }
 
-  if (!html) {
-    html = `
-      <div class="p-8 text-center text-gray-500">
-        검색 결과가 없습니다. 다른 검색어나 지역명을 입력해보세요.
-      </div>
-    `;
+  // 편의점 4사 카드
+  if (resMap.gs25) {
+    html += renderConvenienceSection(resMap.gs25);
+  }
+  if (resMap.cu) {
+    html += renderConvenienceSection(resMap.cu);
+  }
+  if (resMap.seven) {
+    html += renderConvenienceSection(resMap.seven);
+  }
+  if (resMap.emart24) {
+    html += renderConvenienceSection(resMap.emart24);
   }
 
   resultsContainer.innerHTML = html;
-  setTab(state.currentTab); // 현재 탭 표시 반영
+  filterSections(state.currentTab);
 }
 
 function renderDaisoSection(res) {
   if (res.error) {
     const errorMsg = res.error?.message || (typeof res.error === 'string' ? res.error : res.diagnostics?.message || '다이소 서버 연결 지연');
     return `
-      <div id="daiso-section" class="mb-6 bg-white rounded-2xl p-4 shadow-sm border border-red-100">
+      <div id="daiso-section" class="result-section mb-6 bg-white rounded-2xl p-4 shadow-sm border border-red-100" data-service="daiso">
         <div class="flex items-center justify-between mb-2">
           <div class="flex items-center gap-2 font-bold text-red-600">
             <span class="w-3 h-3 rounded-full bg-red-500"></span> 다이소
@@ -786,7 +899,7 @@ function renderDaisoSection(res) {
   const originalQuery = res.originalQuery;
 
   return `
-    <div id="daiso-section" class="mb-6 bg-white rounded-2xl p-4 shadow-sm border border-red-100">
+    <div id="daiso-section" class="result-section mb-6 bg-white rounded-2xl p-4 shadow-sm border border-red-100" data-service="daiso">
       <div class="flex items-center justify-between pb-3 border-b border-gray-100">
         <div class="flex items-center gap-2">
           <span class="px-2 py-0.5 text-xs font-bold bg-red-500 text-white rounded-md">다이소</span>
@@ -872,7 +985,7 @@ function renderOliveSection(res) {
   if (res.error) {
     const errorMsg = res.error?.message || (typeof res.error === 'string' ? res.error : res.diagnostics?.message || '올리브영 릴레이 응답 지연');
     return `
-      <div id="olive-section" class="mb-6 bg-white rounded-2xl p-4 shadow-sm border border-emerald-100">
+      <div id="olive-section" class="result-section mb-6 bg-white rounded-2xl p-4 shadow-sm border border-emerald-100" data-service="oliveyoung">
         <div class="flex items-center justify-between mb-2">
           <div class="flex items-center gap-2 font-bold text-emerald-600">
             <span class="w-3 h-3 rounded-full bg-emerald-500"></span> 올리브영
@@ -891,7 +1004,7 @@ function renderOliveSection(res) {
   const originalQuery = res.originalQuery;
 
   return `
-    <div id="olive-section" class="mb-6 bg-white rounded-2xl p-4 shadow-sm border border-emerald-100">
+    <div id="olive-section" class="result-section mb-6 bg-white rounded-2xl p-4 shadow-sm border border-emerald-100" data-service="oliveyoung">
       <div class="flex items-center justify-between pb-3 border-b border-gray-100">
         <div class="flex items-center gap-2">
           <span class="px-2 py-0.5 text-xs font-bold bg-emerald-600 text-white rounded-md">올리브영</span>
@@ -978,6 +1091,87 @@ function renderOliveSection(res) {
                         .join('')
                 }
               </div>
+            </div>
+          `;
+                })
+                .join('')
+        }
+      </div>
+    </div>
+  `;
+}
+
+function renderConvenienceSection(res) {
+  if (!res) return '';
+  const { service, brandName, brandColor } = res;
+
+  if (res.error) {
+    const errorMsg = res.error?.message || (typeof res.error === 'string' ? res.error : '편의점 릴레이 일시 지연');
+    return `
+      <div id="${service}-section" class="result-section mb-6 bg-white rounded-2xl p-4 shadow-sm border ${brandColor.border}" data-service="${service}">
+        <div class="flex items-center justify-between mb-2">
+          <div class="flex items-center gap-2 font-bold ${brandColor.text}">
+            <span class="w-2.5 h-2.5 rounded-full ${brandColor.bg}"></span> ${brandName}
+          </div>
+          <span class="text-[11px] text-amber-600 font-semibold px-2 py-0.5 bg-amber-50 rounded-md border border-amber-200">일시 지연</span>
+        </div>
+        <p class="text-xs text-gray-600 leading-relaxed">${escapeHtml(errorMsg)}</p>
+        <p class="text-[11px] text-gray-400 mt-1">${brandName} 전산망 연동이 일시 지연 중입니다. 잠시 후 재시도해주세요.</p>
+      </div>
+    `;
+  }
+
+  const stores = res.stores || [];
+  const inStockStores = stores.filter((s) => s.quantity > 0);
+  const prodName = res.productName || state.currentQuery;
+  const prodPrice = res.productPrice ? Number(res.productPrice).toLocaleString() + '원' : '';
+
+  return `
+    <div id="${service}-section" class="result-section mb-6 bg-white rounded-2xl p-4 shadow-sm border ${brandColor.border}" data-service="${service}">
+      <div class="flex items-center justify-between pb-3 border-b border-gray-100">
+        <div class="flex items-center gap-2">
+          <span class="px-2 py-0.5 text-xs font-bold ${brandColor.bg} text-white rounded-md">${brandName}</span>
+          <span class="text-xs text-gray-500 font-medium truncate max-w-[150px]">${escapeHtml(prodName)}</span>
+        </div>
+        <div class="flex items-center gap-2 text-xs">
+          ${prodPrice ? `<span class="font-bold text-gray-800">${prodPrice}</span>` : ''}
+          <span class="text-[11px] font-bold ${inStockStores.length > 0 ? brandColor.text : 'text-gray-400'}">
+            ${inStockStores.length > 0 ? `${inStockStores.length}곳 보유` : '재고 없음'}
+          </span>
+        </div>
+      </div>
+
+      <div class="space-y-2 mt-3">
+        ${
+          stores.length === 0
+            ? '<p class="text-xs text-gray-400 py-3 text-center">주변 매장에 확인된 재고가 없습니다.</p>'
+            : stores
+                .slice(0, 5)
+                .map((s) => {
+                  const hasStock = s.quantity > 0;
+                  const badgeClass = hasStock
+                    ? 'bg-green-100 text-green-800 border-green-200'
+                    : 'bg-red-100 text-red-700 border-red-200';
+                  const badgeText = hasStock ? `재고 ${s.quantity}개` : '품절';
+                  const mapUrl = `https://map.kakao.com/link/search/${encodeURIComponent(s.address || s.storeName)}`;
+                  const distText = formatStoreDistance(s, state.geoCoords);
+
+                  return `
+            <div class="p-3 bg-gray-50/70 hover:bg-gray-50 rounded-xl border border-gray-100 flex items-start justify-between gap-2">
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2">
+                  <span class="font-bold text-sm text-gray-900 truncate">${escapeHtml(s.storeName)}</span>
+                  ${distText ? `<span class="text-xs text-gray-400 font-medium shrink-0">${distText}</span>` : ''}
+                </div>
+                <p class="text-xs text-gray-500 mt-1 leading-relaxed truncate">${escapeHtml(s.address || '')}</p>
+                <div class="flex items-center gap-3 mt-2 text-xs">
+                  ${s.phone ? `<a href="tel:${s.phone}" class="text-blue-600 hover:underline">📞 ${s.phone}</a>` : ''}
+                  <a href="${mapUrl}" target="_blank" class="text-gray-500 hover:text-gray-800 underline">🗺️ 지도/길찾기</a>
+                </div>
+              </div>
+              <span class="px-2.5 py-1 text-xs font-bold rounded-lg border ${badgeClass} shrink-0">
+                ${badgeText}
+              </span>
             </div>
           `;
                 })

@@ -1,5 +1,5 @@
-// sw.js - Service Worker for Retail PWA (v6: Haversine distance & invalid distance filter)
-const CACHE_NAME = 'retail-pwa-v6';
+// sw.js - Service Worker for Retail PWA (v7: 4 Convenience Stores Integration)
+const CACHE_NAME = 'retail-pwa-v7';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
