@@ -1,5 +1,5 @@
-// sw.js - Service Worker for Retail PWA (v5: Network-First Cache Strategy)
-const CACHE_NAME = 'retail-pwa-v5';
+// sw.js - Service Worker for Retail PWA (v6: Haversine distance & invalid distance filter)
+const CACHE_NAME = 'retail-pwa-v6';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',

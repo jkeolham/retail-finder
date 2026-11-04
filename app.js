@@ -387,6 +387,105 @@ confirmMapBtn.addEventListener('click', () => {
   }
 });
 
+// ----------------- Geocoding & Distance Utilities -----------------
+async function getCoordinatesFromText(queryText) {
+  if (!queryText) return null;
+  const clean = queryText.replace(/\(.*\)/, '').trim();
+  if (!clean) return null;
+
+  const quickMap = {
+    '과천': { lat: 37.4283, lng: 126.9910 },
+    '중앙동': { lat: 37.4292, lng: 126.9876 },
+    '별양동': { lat: 37.4262, lng: 126.9918 },
+    '원문동': { lat: 37.4215, lng: 126.9930 },
+    '갈현동': { lat: 37.4168, lng: 126.9821 },
+    '문원동': { lat: 37.4182, lng: 126.9975 },
+    '부림동': { lat: 37.4362, lng: 126.9972 },
+    '과천동': { lat: 37.4475, lng: 127.0094 },
+    '강남': { lat: 37.4979, lng: 127.0276 },
+    '역삼동': { lat: 37.5006, lng: 127.0364 },
+    '판교': { lat: 37.3947, lng: 127.1112 },
+    '분당': { lat: 37.3827, lng: 127.1189 },
+    '안양': { lat: 37.3943, lng: 126.9568 },
+    '평촌': { lat: 37.3940, lng: 126.9639 },
+    '범계': { lat: 37.3898, lng: 126.9507 },
+    '인덕원': { lat: 37.4018, lng: 126.9768 },
+    '사당': { lat: 37.4765, lng: 126.9816 }
+  };
+
+  for (const [key, coords] of Object.entries(quickMap)) {
+    if (clean.includes(key)) return coords;
+  }
+
+  try {
+    const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&countrycodes=kr&limit=1&q=${encodeURIComponent(clean)}`;
+    const res = await fetch(url);
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.length > 0) {
+        return {
+          lat: parseFloat(data[0].lat),
+          lng: parseFloat(data[0].lon)
+        };
+      }
+    }
+  } catch (e) {
+    console.warn('정방향 지오코딩 실패:', e);
+  }
+  return null;
+}
+
+function computeHaversine(lat1, lon1, lat2, lon2) {
+  const R = 6371; // km
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+function isValidCoords(lat, lng) {
+  if (lat == null || lng == null) return false;
+  const numLat = parseFloat(lat);
+  const numLng = parseFloat(lng);
+  if (isNaN(numLat) || isNaN(numLng)) return false;
+  return numLat >= 33.0 && numLat <= 39.0 && numLng >= 124.0 && numLng <= 132.0;
+}
+
+function formatStoreDistance(store, userCoords) {
+  const storeLat = store.lat ?? store.latitude;
+  const storeLng = store.lng ?? store.longitude;
+
+  // 1. 사용자 좌표와 매장 유효 좌표가 모두 있는 경우 (정밀 하버사인 거리 계산)
+  if (userCoords && isValidCoords(userCoords.lat, userCoords.lng) && isValidCoords(storeLat, storeLng)) {
+    const dist = computeHaversine(userCoords.lat, userCoords.lng, parseFloat(storeLat), parseFloat(storeLng));
+    if (dist > 60) return null; // 60km 초과 시 비정상치로 간주하여 숨김
+    return dist < 0.1 ? '100m 이내' : `${dist.toFixed(1)}km`;
+  }
+
+  // 2. 서버가 계산해준 store.distance 사용 시 비정상치 방어
+  if (store.distance != null) {
+    const numDist = parseFloat(store.distance);
+    if (isNaN(numDist)) return null;
+
+    // 매장 좌표가 0이거나 유효하지 않은 경우 (13197.1km 등 Null Island 오염치) 완전 차단
+    if (storeLat != null && !isValidCoords(storeLat, storeLng)) {
+      return null;
+    }
+
+    // 서버 반환 거리가 50km 이상인 경우 숨김
+    if (numDist >= 50) {
+      return null;
+    }
+
+    return numDist < 0.1 ? '100m 이내' : `${numDist.toFixed(1)}km`;
+  }
+
+  return null;
+}
+
 // ----------------- Utilities -----------------
 function escapeHtml(str) {
   if (!str) return '';
@@ -439,6 +538,12 @@ function renderRecentSearches() {
 }
 
 // ----------------- Search Execution -----------------
+locationInput.addEventListener('input', () => {
+  // 사용자가 동네를 직접 입력하기 시작하면 이전 GPS/지도 좌표 캐시 초기화
+  gpsStatus.textContent = '';
+  state.geoCoords = null;
+});
+
 searchForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const query = queryInput.value.trim();
@@ -447,6 +552,14 @@ searchForm.addEventListener('submit', async (e) => {
   if (!query) {
     alert('검색할 상품명을 입력해주세요.');
     return;
+  }
+
+  // 텍스트 위치 입력 시 좌표가 없으면 자동 지오코딩으로 보완
+  if (location && !state.geoCoords) {
+    const foundCoords = await getCoordinatesFromText(location);
+    if (foundCoords) {
+      state.geoCoords = foundCoords;
+    }
   }
 
   state.currentQuery = query;
@@ -727,13 +840,14 @@ function renderDaisoSection(res) {
                     : 'bg-gray-100 text-gray-600 border-gray-200';
                   const badgeText = hasStock ? `재고 ${qty}개` : isZero ? '품절' : '수량 미확인';
                   const mapUrl = `https://map.kakao.com/link/search/${encodeURIComponent(s.address || s.storeName)}`;
+                  const distText = formatStoreDistance(s, state.geoCoords);
 
                   return `
             <div class="p-3 bg-gray-50/70 hover:bg-gray-50 rounded-xl border border-gray-100 flex items-start justify-between gap-2">
               <div class="flex-1">
                 <div class="flex items-center gap-2">
                   <span class="font-bold text-sm text-gray-900">${s.storeName}</span>
-                  ${s.distance ? `<span class="text-xs text-gray-400 font-medium">${s.distance}km</span>` : ''}
+                  ${distText ? `<span class="text-xs text-gray-400 font-medium">${distText}</span>` : ''}
                 </div>
                 <p class="text-xs text-gray-500 mt-1 leading-relaxed">${s.address || ''}</p>
                 <div class="flex items-center gap-3 mt-2 text-xs">
@@ -843,11 +957,15 @@ function renderOliveSection(res) {
                             ? `<span class="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded">${sqty > 0 ? sqty + '개' : '보유'}</span>`
                             : '<span class="text-[10px] font-semibold text-gray-400 bg-gray-200 px-1.5 py-0.5 rounded">품절</span>';
                           const mapUrl = `https://map.kakao.com/link/search/${encodeURIComponent(s.address || s.storeName)}`;
+                          const distText = formatStoreDistance(s, state.geoCoords);
 
                           return `
                     <div class="flex items-center justify-between text-xs py-1 border-b border-gray-100 last:border-0">
                       <div class="flex-1 min-w-0 pr-2">
-                        <div class="font-medium text-gray-800 truncate">${s.storeName}</div>
+                        <div class="font-medium text-gray-800 truncate flex items-center gap-1.5">
+                          <span>${s.storeName}</span>
+                          ${distText ? `<span class="text-[10px] text-gray-400 font-normal">${distText}</span>` : ''}
+                        </div>
                         <div class="text-[10px] text-gray-400 truncate">${s.address || ''}</div>
                       </div>
                       <div class="flex items-center gap-1.5 shrink-0">
