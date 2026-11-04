@@ -1,5 +1,5 @@
 // sw.js - Service Worker for Retail PWA
-const CACHE_NAME = 'retail-pwa-v3';
+const CACHE_NAME = 'retail-pwa-v4';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',

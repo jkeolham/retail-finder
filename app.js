@@ -152,6 +152,14 @@ const newPinInput = document.getElementById('new-pin-input');
 const savePinBtn = document.getElementById('save-pin-btn');
 const closeSettingsBtn = document.getElementById('close-settings-btn');
 
+// Map Picker Modal Elements
+const mapPickerBtn = document.getElementById('map-picker-btn');
+const mapModal = document.getElementById('map-modal');
+const closeMapBtn = document.getElementById('close-map-btn');
+const mapMyGpsBtn = document.getElementById('map-my-gps-btn');
+const confirmMapBtn = document.getElementById('confirm-map-btn');
+const mapAddressDisplay = document.getElementById('map-address-display');
+
 // ----------------- PIN Auth -----------------
 function checkAuth() {
   const isAuth = localStorage.getItem('family_authenticated') === 'true';
@@ -232,7 +240,38 @@ tabAll.addEventListener('click', () => setTab('all'));
 tabDaiso.addEventListener('click', () => setTab('daiso'));
 tabOlive.addEventListener('click', () => setTab('oliveyoung'));
 
-// ----------------- Geolocation -----------------
+// ----------------- Reverse Geocoding (좌표 ➔ 동 이름 변환) -----------------
+async function reverseGeocode(lat, lng) {
+  try {
+    const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&accept-language=ko`;
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'RetailFinderPWA/1.0' }
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const addr = data.address || {};
+
+    // 한국 행정구역 특화 추출 (법정동 -> 행정동 -> 마을)
+    const dong = addr.quarter || addr.suburb || addr.neighbourhood || addr.village || '';
+    const borough = addr.borough || addr.district || '';
+    const city = addr.city || addr.town || addr.county || '';
+
+    if (dong && (borough || city)) {
+      const region = borough || city;
+      return `${dong} (${region})`;
+    }
+    if (dong) return dong;
+    if (borough && city) return `${borough} (${city})`;
+    if (city) return city;
+
+    return data.display_name?.split(',')[0] || '선택한 위치';
+  } catch (e) {
+    console.warn('역지오코딩 조회 오류:', e);
+    return null;
+  }
+}
+
+// ----------------- Geolocation (GPS 내 위치) -----------------
 gpsBtn.addEventListener('click', () => {
   if (!navigator.geolocation) {
     alert('사용 중인 브라우저에서 위치 서비스를 지원하지 않습니다.');
@@ -242,13 +281,18 @@ gpsBtn.addEventListener('click', () => {
   gpsBtn.disabled = true;
 
   navigator.geolocation.getCurrentPosition(
-    (pos) => {
-      state.geoCoords = {
-        lat: pos.coords.latitude,
-        lng: pos.coords.longitude
-      };
-      locationInput.value = '내 위치 (GPS 연동)';
-      gpsStatus.textContent = '📍 GPS 완료';
+    async (pos) => {
+      const lat = pos.coords.latitude;
+      const lng = pos.coords.longitude;
+      state.geoCoords = { lat, lng };
+
+      gpsStatus.textContent = '동네 확인 중...';
+      const dong = await reverseGeocode(lat, lng);
+      const displayLocation = dong || '내 위치 (GPS)';
+
+      locationInput.value = displayLocation;
+      state.currentLocation = displayLocation;
+      gpsStatus.textContent = `📍 ${dong ? dong.split(' ')[0] : 'GPS 완료'}`;
       gpsBtn.disabled = false;
     },
     (err) => {
@@ -258,6 +302,82 @@ gpsBtn.addEventListener('click', () => {
     },
     { enableHighAccuracy: true, timeout: 10000 }
   );
+});
+
+// ----------------- Map Picker (Leaflet 지도 선택) -----------------
+let leafletMap = null;
+let mapSelectedCoords = null;
+let mapSelectedDong = '';
+let mapDebounceTimer = null;
+
+function openMapPicker() {
+  mapModal.classList.remove('hidden');
+
+  const defaultLat = state.geoCoords?.lat || 37.4283;
+  const defaultLng = state.geoCoords?.lng || 126.9910; // 기본 과천
+  mapSelectedCoords = { lat: defaultLat, lng: defaultLng };
+
+  if (!leafletMap) {
+    leafletMap = L.map('map-view', { zoomControl: false });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '© OpenStreetMap'
+    }).addTo(leafletMap);
+
+    // 지도 이동 시 중심 좌표 역지오코딩
+    leafletMap.on('moveend', () => {
+      clearTimeout(mapDebounceTimer);
+      mapDebounceTimer = setTimeout(async () => {
+        const center = leafletMap.getCenter();
+        mapSelectedCoords = { lat: center.lat, lng: center.lng };
+        mapAddressDisplay.textContent = '동네 확인 중...';
+        const dong = await reverseGeocode(center.lat, center.lng);
+        mapSelectedDong = dong || `${center.lat.toFixed(4)}, ${center.lng.toFixed(4)}`;
+        mapAddressDisplay.textContent = mapSelectedDong;
+      }, 350);
+    });
+  }
+
+  leafletMap.setView([defaultLat, defaultLng], 15);
+  mapAddressDisplay.textContent = '동네 확인 중...';
+
+  setTimeout(async () => {
+    leafletMap.invalidateSize();
+    const dong = await reverseGeocode(defaultLat, defaultLng);
+    mapSelectedDong = dong || '과천시 중앙동';
+    mapAddressDisplay.textContent = mapSelectedDong;
+  }, 250);
+}
+
+mapPickerBtn.addEventListener('click', openMapPicker);
+closeMapBtn.addEventListener('click', () => mapModal.classList.add('hidden'));
+
+// 지도 모달 내 [내 GPS] 이동 버튼
+mapMyGpsBtn.addEventListener('click', () => {
+  if (!navigator.geolocation) {
+    alert('위치 서비스를 지원하지 않습니다.');
+    return;
+  }
+  mapAddressDisplay.textContent = 'GPS 위치 찾는 중...';
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      leafletMap.setView([pos.coords.latitude, pos.coords.longitude], 16);
+    },
+    (err) => alert('위치 권한을 확인해주세요: ' + err.message)
+  );
+});
+
+// 지도 모달 [이 동네로 선택하기]
+confirmMapBtn.addEventListener('click', () => {
+  if (mapSelectedDong) {
+    locationInput.value = mapSelectedDong;
+    state.geoCoords = mapSelectedCoords;
+    state.currentLocation = mapSelectedDong;
+    gpsStatus.textContent = '🗺️ 지도 선택';
+    mapModal.classList.add('hidden');
+  } else {
+    alert('지도를 움직여 위치를 선택해주세요.');
+  }
 });
 
 // ----------------- Utilities -----------------
@@ -484,6 +604,18 @@ async function callOliveyoungInventory(keyword, storeKeyword, geoCoords) {
 // ----------------- Render Results -----------------
 function renderResults(daiso, olive) {
   let html = '';
+
+  // 기준 동네 안내 헤더
+  const locDisplay = state.currentLocation || '내 위치';
+  html += `
+    <div class="p-3 bg-white rounded-2xl border border-blue-100 shadow-sm flex items-center justify-between text-xs mb-2">
+      <div class="flex items-center gap-1.5 text-gray-900 font-bold">
+        <span class="text-base">📍</span>
+        <span>기준 동네: <b class="text-blue-600">${escapeHtml(locDisplay)}</b></span>
+      </div>
+      <span class="text-[11px] text-gray-400 font-medium">반경 매장 재고</span>
+    </div>
+  `;
 
   // 다이소 카드
   if (daiso) {
