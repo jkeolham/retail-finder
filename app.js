@@ -540,7 +540,39 @@ function renderRecentSearches() {
   });
 }
 
-// ----------------- Search Execution -----------------
+// ----------------- Search Execution (실시간 점진적 스트리밍 렌더링) -----------------
+const CHANNELS = [
+  { id: 'daiso', name: '다이소', icon: '🔴', color: 'red' },
+  { id: 'oliveyoung', name: '올리브영', icon: '🟢', color: 'emerald' },
+  { id: 'gs25', name: 'GS25', icon: '🔵', color: 'blue' },
+  { id: 'cu', name: 'CU', icon: '🟣', color: 'purple' },
+  { id: 'seveneleven', name: '세븐', icon: '🟢', color: 'emerald' },
+  { id: 'emart24', name: '이마트24', icon: '🟡', color: 'amber' },
+  { id: 'coupang', name: '쿠팡 로켓', icon: '🚀', color: 'sky' }
+];
+
+function renderSkeletonCard(ch) {
+  return `
+    <div class="mb-4 bg-white rounded-2xl p-4 shadow-sm border border-gray-100/90 animate-pulse">
+      <div class="flex items-center justify-between pb-3 border-b border-gray-100">
+        <div class="flex items-center gap-2">
+          <span class="text-sm">${ch.icon}</span>
+          <span class="text-xs font-bold text-gray-700">${ch.name}</span>
+          <span class="text-[10px] text-gray-400">재고 확인 중...</span>
+        </div>
+        <span class="text-[10px] text-blue-500 font-semibold flex items-center gap-1">
+          <span class="w-1.5 h-1.5 rounded-full bg-blue-500 animate-ping"></span>
+          실시간 조회 중
+        </span>
+      </div>
+      <div class="space-y-2.5 mt-3">
+        <div class="h-12 bg-gray-100/80 rounded-xl"></div>
+        <div class="h-12 bg-gray-100/80 rounded-xl"></div>
+      </div>
+    </div>
+  `;
+}
+
 locationInput.addEventListener('input', () => {
   // 사용자가 동네를 직접 입력하기 시작하면 이전 GPS/지도 좌표 캐시 초기화
   gpsStatus.textContent = '';
@@ -570,49 +602,150 @@ searchForm.addEventListener('submit', async (e) => {
   saveRecentSearch(query, location);
 
   emptyState.classList.add('hidden');
-  resultsContainer.innerHTML = '';
-  loadingEl.classList.remove('hidden');
+  loadingEl.classList.add('hidden'); // 점진적 카드로 대체되므로 전체 스피너 숨김
 
-  try {
-    const activeTab = state.currentTab;
-    const shouldFetchDaiso = activeTab === 'all' || activeTab === 'daiso';
-    const shouldFetchOlive = activeTab === 'all' || activeTab === 'oliveyoung';
-    const shouldFetchGs25 = activeTab === 'all' || activeTab === 'cvs' || activeTab === 'gs25';
-    const shouldFetchCu = activeTab === 'all' || activeTab === 'cvs' || activeTab === 'cu';
-    const shouldFetchSeven = activeTab === 'all' || activeTab === 'cvs' || activeTab === 'seveneleven';
-    const shouldFetchEmart24 = activeTab === 'all' || activeTab === 'cvs' || activeTab === 'emart24';
+  // 1. 프로그레시브 슬롯 컨테이너 및 헤더 즉각 렌더링
+  const locDisplay = state.currentLocation || '내 위치';
+  const activeTab = state.currentTab;
 
-    const tasks = [
-      shouldFetchDaiso ? fetchDaiso(query, location, state.geoCoords) : Promise.resolve(null),
-      shouldFetchOlive ? fetchOliveyoung(query, location, state.geoCoords) : Promise.resolve(null),
-      shouldFetchGs25 ? fetchConvenienceStore('gs25', query, location, state.geoCoords) : Promise.resolve(null),
-      shouldFetchCu ? fetchConvenienceStore('cu', query, location, state.geoCoords) : Promise.resolve(null),
-      shouldFetchSeven ? fetchConvenienceStore('seveneleven', query, location, state.geoCoords) : Promise.resolve(null),
-      shouldFetchEmart24 ? fetchConvenienceStore('emart24', query, location, state.geoCoords) : Promise.resolve(null)
-    ];
-
-    const results = await Promise.allSettled(tasks);
-    const [daisoRes, oliveRes, gs25Res, cuRes, sevenRes, emart24Res] = results.map((r) =>
-      r.status === 'fulfilled' ? r.value : { error: r.reason?.message || '조회 실패' }
-    );
-
-    loadingEl.classList.add('hidden');
-    renderResults({
-      daiso: daisoRes,
-      olive: oliveRes,
-      gs25: gs25Res,
-      cu: cuRes,
-      seven: sevenRes,
-      emart24: emart24Res
-    });
-  } catch (err) {
-    loadingEl.classList.add('hidden');
-    resultsContainer.innerHTML = `
-      <div class="p-4 bg-red-50 text-red-700 rounded-xl border border-red-200 text-sm">
-        ❌ 조회 중 오류가 발생했습니다: ${err.message}
+  let initialHtml = `
+    <div class="p-3 bg-white rounded-2xl border border-blue-100 shadow-sm flex items-center justify-between text-xs mb-3">
+      <div class="flex items-center gap-1.5 text-gray-900 font-bold">
+        <span class="text-base">📍</span>
+        <span>기준 동네: <b class="text-blue-600">${escapeHtml(locDisplay)}</b></span>
       </div>
-    `;
+      <div id="search-progress-badge" class="flex items-center gap-1 text-[11px] text-blue-600 font-bold bg-blue-50 px-2 py-0.5 rounded-full border border-blue-200">
+        <span class="w-1.5 h-1.5 rounded-full bg-blue-500 animate-ping"></span>
+        <span id="search-progress-text">매장별 실시간 확인 중 (0/6)</span>
+      </div>
+    </div>
+
+    <!-- 채널별 실시간 상태 미니 칩 바 -->
+    <div class="flex items-center gap-1.5 overflow-x-auto pb-2 text-[11px] font-semibold scrollbar-none" id="channel-chips-bar">
+      ${CHANNELS.map(
+        (ch) => `
+        <div id="chip-${ch.id}" class="px-2.5 py-1 rounded-lg bg-gray-100 text-gray-500 border border-gray-200 shrink-0 flex items-center gap-1 transition">
+          <span>${ch.icon}</span>
+          <span>${ch.name}</span>
+          <span class="chip-status text-[10px]">⏳</span>
+        </div>
+      `
+      ).join('')}
+    </div>
+
+    <!-- 매장별 점진적 결과 슬롯 -->
+    <div id="progressive-slots" class="space-y-1">
+      ${CHANNELS.map(
+        (ch) => `
+        <div id="slot-${ch.id}" class="result-section" data-service="${ch.id}">
+          ${ch.id === 'coupang' ? renderCoupangSection(query) : renderSkeletonCard(ch)}
+        </div>
+      `
+      ).join('')}
+    </div>
+  `;
+
+  resultsContainer.innerHTML = initialHtml;
+  filterSections(activeTab);
+
+  // 쿠팡 칩 즉시 완료 표시
+  const coupangChip = document.getElementById('chip-coupang');
+  if (coupangChip) {
+    const s = coupangChip.querySelector('.chip-status');
+    if (s) s.textContent = '🚀 즉시';
+    coupangChip.className = 'px-2.5 py-1 rounded-lg border border-sky-200 bg-sky-50 text-sky-700 shrink-0 flex items-center gap-1 transition font-bold';
   }
+
+  // 2. 비동기 독립 실행 및 도착 즉시 카드 슬롯 갱신
+  let completedCount = 0;
+  const targetChannels = ['daiso', 'oliveyoung', 'gs25', 'cu', 'seveneleven', 'emart24'];
+
+  function updateChannelProgress(channelId, statusText, isSuccess, hasStock) {
+    completedCount++;
+    const progressBadge = document.getElementById('search-progress-badge');
+    const progressText = document.getElementById('search-progress-text');
+
+    if (progressBadge && progressText) {
+      if (completedCount >= targetChannels.length) {
+        progressBadge.innerHTML = `
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+          <span class="text-emerald-700">전 매장 확인 완료</span>
+        `;
+        progressBadge.className = 'flex items-center gap-1 text-[11px] font-bold bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200';
+      } else {
+        progressText.textContent = `매장별 실시간 확인 중 (${completedCount}/${targetChannels.length})`;
+      }
+    }
+
+    const chipEl = document.getElementById(`chip-${channelId}`);
+    if (chipEl) {
+      const statusSpan = chipEl.querySelector('.chip-status');
+      if (statusSpan) statusSpan.textContent = statusText;
+      if (hasStock) {
+        chipEl.className = 'px-2.5 py-1 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-800 shrink-0 flex items-center gap-1 transition font-bold shadow-xs';
+      } else if (isSuccess) {
+        chipEl.className = 'px-2.5 py-1 rounded-lg border border-gray-200 bg-gray-50 text-gray-600 shrink-0 flex items-center gap-1 transition';
+      } else {
+        chipEl.className = 'px-2.5 py-1 rounded-lg border border-amber-200 bg-amber-50 text-amber-700 shrink-0 flex items-center gap-1 transition';
+      }
+    }
+  }
+
+  // (1) 다이소 개별 비동기
+  fetchDaiso(query, location, state.geoCoords)
+    .then((res) => {
+      const slot = document.getElementById('slot-daiso');
+      if (slot) {
+        slot.innerHTML = renderDaisoSection(res);
+        filterSections(state.currentTab);
+      }
+      const inStockStores = res.storeInventory?.stores?.filter((s) => s.quantity && s.quantity > 0) || [];
+      const hasStock = inStockStores.length > 0;
+      updateChannelProgress('daiso', hasStock ? `${inStockStores.length}곳 보유` : '품절', !res.error, hasStock);
+    })
+    .catch((err) => {
+      const slot = document.getElementById('slot-daiso');
+      if (slot) slot.innerHTML = renderDaisoSection({ error: err });
+      updateChannelProgress('daiso', '오류', false, false);
+    });
+
+  // (2) 올리브영 개별 비동기
+  fetchOliveyoung(query, location, state.geoCoords)
+    .then((res) => {
+      const slot = document.getElementById('slot-oliveyoung');
+      if (slot) {
+        slot.innerHTML = renderOliveSection(res);
+        filterSections(state.currentTab);
+      }
+      const inStockStores = res.inventory?.products?.[0]?.storeInventory?.stores?.filter((s) => s.o2oStockFlag || s.o2oRemainQuantity > 0) || [];
+      const hasStock = inStockStores.length > 0;
+      updateChannelProgress('oliveyoung', hasStock ? `${inStockStores.length}곳 보유` : res.error ? '지연' : '품절', !res.error, hasStock);
+    })
+    .catch((err) => {
+      const slot = document.getElementById('slot-oliveyoung');
+      if (slot) slot.innerHTML = renderOliveSection({ error: err });
+      updateChannelProgress('oliveyoung', '오류', false, false);
+    });
+
+  // (3) 편의점 4사(GS25, CU, 세븐일레븐, 이마트24) 각각 독립 비동기
+  ['gs25', 'cu', 'seveneleven', 'emart24'].forEach((service) => {
+    fetchConvenienceStore(service, query, location, state.geoCoords)
+      .then((res) => {
+        const slot = document.getElementById(`slot-${service}`);
+        if (slot) {
+          slot.innerHTML = renderConvenienceSection(res);
+          filterSections(state.currentTab);
+        }
+        const inStockStores = res.stores?.filter((s) => s.quantity > 0) || [];
+        const hasStock = inStockStores.length > 0;
+        updateChannelProgress(service, hasStock ? `${inStockStores.length}곳 보유` : res.error ? '지연' : '품절', !res.error, hasStock);
+      })
+      .catch((err) => {
+        const slot = document.getElementById(`slot-${service}`);
+        if (slot) slot.innerHTML = renderConvenienceSection({ service, error: err });
+        updateChannelProgress(service, '오류', false, false);
+      });
+  });
 });
 
 // ----------------- Smart Semantic Dictionary (일상어 / 은어 / 유의어 자동 보정) -----------------
