@@ -180,7 +180,7 @@
       <div>
         <h3 class="text-base font-extrabold text-gray-900">가족 인증</h3>
         <p class="text-xs text-gray-500 mt-1">우리 가족 전용 PIN 번호(4자리)를 입력해주세요.</p>
-        <p class="text-[10px] text-blue-500 mt-0.5">(기본 비밀번호: 1234)</p>
+        <p class="text-[10px] text-blue-500 mt-0.5">(기본 비밀번호: 4696)</p>
       </div>
       <div>
         <input id="pin-input" type="password" maxlength="8" inputmode="numeric" placeholder="PIN 입력"
@@ -194,21 +194,38 @@
     </div>
   </div>
 
-  <!-- Settings Modal (PIN Change) -->
+  <!-- Settings Modal (Admin PIN Change) -->
   <div id="settings-modal" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
     <div class="bg-white rounded-3xl p-6 max-w-xs w-full shadow-2xl space-y-4">
       <div class="flex items-center justify-between pb-2 border-b border-gray-100">
-        <h3 class="text-sm font-bold text-gray-900">⚙️ 가족 PIN 번호 변경</h3>
-        <button id="close-settings-btn" class="text-gray-400 hover:text-gray-600 text-lg">✕</button>
+        <div>
+          <h3 class="text-sm font-extrabold text-gray-900">⚙️ 관리자 PIN 변경</h3>
+          <p class="text-[10px] text-gray-400">관리자(나)만 PIN 번호를 변경할 수 있습니다.</p>
+        </div>
+        <button id="close-settings-btn" class="text-gray-400 hover:text-gray-600 text-lg p-1">✕</button>
       </div>
-      <div>
-        <label class="block text-xs text-gray-600 mb-1">새로운 4자리 이상 PIN</label>
-        <input id="new-pin-input" type="password" maxlength="8" inputmode="numeric" placeholder="새 PIN 번호"
-               class="w-full text-center text-lg font-bold py-2 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500">
+
+      <div class="space-y-3">
+        <!-- 현재 PIN 확인 -->
+        <div>
+          <label class="block text-[11px] font-semibold text-gray-600 mb-1">현재 PIN (관리자 확인)</label>
+          <input id="current-pin-input" type="password" maxlength="8" inputmode="numeric" placeholder="현재 PIN 번호 입력"
+                 class="w-full text-center text-base font-bold py-2 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-gray-50/50">
+        </div>
+
+        <!-- 새로운 PIN 입력 -->
+        <div>
+          <label class="block text-[11px] font-semibold text-gray-600 mb-1">새로운 PIN (4자리 이상)</label>
+          <input id="new-pin-input" type="password" maxlength="8" inputmode="numeric" placeholder="새로운 PIN 입력"
+                 class="w-full text-center text-base font-bold py-2 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-gray-50/50">
+        </div>
+
+        <p id="settings-error" class="hidden text-xs text-red-500 font-semibold text-center leading-snug"></p>
       </div>
+
       <button id="save-pin-btn" type="button"
-              class="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl transition">
-        PIN 번호 저장
+              class="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow-xs transition">
+        PIN 번호 변경 저장
       </button>
     </div>
   </div>
@@ -257,6 +274,6 @@
     </div>
   </div>
 
-  <script src="./app.js?v=9"></script>
+  <script src="./app.js?v=10"></script>
 </body>
 </html>

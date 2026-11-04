@@ -5,7 +5,7 @@
  */
 
 const MCP_ENDPOINT = 'https://mcp.aka.page/mcp';
-const DEFAULT_PIN = '1234';
+const DEFAULT_PIN = '4696';
 
 // ----------------- MCP Client -----------------
 class McpClient {
@@ -146,7 +146,9 @@ const recentSearchesContainer = document.getElementById('recent-searches');
 
 const settingsBtn = document.getElementById('settings-btn');
 const settingsModal = document.getElementById('settings-modal');
+const currentPinInput = document.getElementById('current-pin-input');
 const newPinInput = document.getElementById('new-pin-input');
+const settingsError = document.getElementById('settings-error');
 const savePinBtn = document.getElementById('save-pin-btn');
 const closeSettingsBtn = document.getElementById('close-settings-btn');
 
@@ -158,7 +160,13 @@ const mapMyGpsBtn = document.getElementById('map-my-gps-btn');
 const confirmMapBtn = document.getElementById('confirm-map-btn');
 const mapAddressDisplay = document.getElementById('map-address-display');
 
-// ----------------- PIN Auth -----------------
+// ----------------- PIN Auth & Migration -----------------
+// 기존 1234 버전에서 4696 버전으로 자동 마이그레이션
+const existingPin = localStorage.getItem('family_pin');
+if (!existingPin || existingPin === '1234') {
+  localStorage.setItem('family_pin', DEFAULT_PIN);
+}
+
 function checkAuth() {
   const isAuth = localStorage.getItem('family_authenticated') === 'true';
   if (!isAuth) {
@@ -186,23 +194,45 @@ pinInput.addEventListener('keyup', (e) => {
   if (e.key === 'Enter') pinSubmitBtn.click();
 });
 
-// Settings Modal
+// Settings Modal (관리자 확인 기반 PIN 변경)
 settingsBtn.addEventListener('click', () => {
+  currentPinInput.value = '';
+  newPinInput.value = '';
+  settingsError.classList.add('hidden');
   settingsModal.classList.remove('hidden');
+  currentPinInput.focus();
 });
+
 closeSettingsBtn.addEventListener('click', () => {
   settingsModal.classList.add('hidden');
 });
+
 savePinBtn.addEventListener('click', () => {
+  const currentSavedPin = localStorage.getItem('family_pin') || DEFAULT_PIN;
+  const currentInput = currentPinInput.value.trim();
   const newPin = newPinInput.value.trim();
-  if (newPin.length >= 4) {
-    localStorage.setItem('family_pin', newPin);
-    alert('가족 PIN 번호가 변경되었습니다.');
-    settingsModal.classList.add('hidden');
-    newPinInput.value = '';
-  } else {
-    alert('PIN 번호는 4자리 이상이어야 합니다.');
+
+  // 관리자 권한 확인 (현재 PIN 일치 여부)
+  if (currentInput !== currentSavedPin) {
+    settingsError.textContent = '현재 PIN 번호가 일치하지 않습니다. (관리자만 변경 가능)';
+    settingsError.classList.remove('hidden');
+    currentPinInput.focus();
+    return;
   }
+
+  // 새로운 PIN 길이 검증
+  if (newPin.length < 4) {
+    settingsError.textContent = '새로운 PIN은 4자리 이상이어야 합니다.';
+    settingsError.classList.remove('hidden');
+    newPinInput.focus();
+    return;
+  }
+
+  // PIN 갱신 및 인증 유지
+  localStorage.setItem('family_pin', newPin);
+  localStorage.setItem('family_authenticated', 'true');
+  alert(`✅ 가족 PIN 번호가 [${newPin}]으로 성공적으로 변경되었습니다.`);
+  settingsModal.classList.add('hidden');
 });
 
 // ----------------- Tabs -----------------
