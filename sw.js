@@ -1,5 +1,5 @@
-// sw.js - Service Worker for Retail PWA (v12: Multi-Product 3-Item Display)
-const CACHE_NAME = 'retail-pwa-v12';
+// sw.js - Service Worker for Retail PWA (v13: Hide Default PIN Hint)
+const CACHE_NAME = 'retail-pwa-v13';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
