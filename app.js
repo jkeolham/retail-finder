@@ -729,9 +729,14 @@ searchForm.addEventListener('submit', async (e) => {
         slot.innerHTML = renderDaisoSection(res);
         filterSections(state.currentTab);
       }
-      const inStockStores = res.storeInventory?.stores?.filter((s) => s.quantity && s.quantity > 0) || [];
-      const hasStock = inStockStores.length > 0;
-      updateChannelProgress('daiso', hasStock ? `${inStockStores.length}곳 보유` : '품절', !res.error, hasStock);
+      const allStores = (res.products && res.products.length > 0)
+        ? res.products.flatMap((p) => p.stores || [])
+        : (res.storeInventory?.stores || []);
+      const inStockStoreNames = new Set(
+        allStores.filter((s) => s.quantity && s.quantity > 0).map((s) => s.storeName)
+      );
+      const hasStock = inStockStoreNames.size > 0;
+      updateChannelProgress('daiso', hasStock ? `${inStockStoreNames.size}곳 보유` : (res.error ? '지연' : '품절'), !res.error, hasStock);
     })
     .catch((err) => {
       const slot = document.getElementById('slot-daiso');
@@ -747,9 +752,12 @@ searchForm.addEventListener('submit', async (e) => {
         slot.innerHTML = renderOliveSection(res);
         filterSections(state.currentTab);
       }
-      const inStockStores = res.inventory?.products?.[0]?.storeInventory?.stores?.filter((s) => s.o2oStockFlag || s.o2oRemainQuantity > 0) || [];
-      const hasStock = inStockStores.length > 0;
-      updateChannelProgress('oliveyoung', hasStock ? `${inStockStores.length}곳 보유` : res.error ? '지연' : '품절', !res.error, hasStock);
+      const allOliveStores = (res.inventory?.products || []).flatMap((p) => p.storeInventory?.stores || []);
+      const inStockOliveStoreNames = new Set(
+        allOliveStores.filter((s) => s.o2oStockFlag || s.o2oRemainQuantity > 0).map((s) => s.storeName)
+      );
+      const hasStock = inStockOliveStoreNames.size > 0;
+      updateChannelProgress('oliveyoung', hasStock ? `${inStockOliveStoreNames.size}곳 보유` : res.error ? '지연' : '품절', !res.error, hasStock);
     })
     .catch((err) => {
       const slot = document.getElementById('slot-oliveyoung');
@@ -853,7 +861,7 @@ async function callDaisoInventory(query, storeQuery, geoCoords) {
     args.longitude = geoCoords.lng;
   }
 
-  // check_inventory와 search_products를 병렬로 호출하여 가격 조회 지연 최소화
+  // check_inventory와 search_products를 병렬로 호출하여 가격 및 상품 목록 동시 확보
   const [invResult, searchResult] = await Promise.allSettled([
     mcp.callTool('check_inventory', args),
     mcp.callTool('search_products', { service: 'daiso', query: query })
@@ -866,32 +874,83 @@ async function callDaisoInventory(query, storeQuery, geoCoords) {
   const res = invResult.value;
   if (!res || res.error) return res;
 
-  // 가격 매칭 및 주입
-  if (res.selectedProduct) {
-    if (searchResult.status === 'fulfilled' && searchResult.value?.products) {
-      const prods = searchResult.value.products;
-      const matched = prods.find((p) => p.id === res.selectedProduct.id || p.name === res.selectedProduct.name);
-      if (matched && matched.price) {
-        res.selectedProduct.price = matched.price;
-      }
-    }
+  const searchProds = (searchResult.status === 'fulfilled' && searchResult.value?.products)
+    ? searchResult.value.products
+    : [];
 
-    // search_products에서 못 찾았을 경우 get_product_details(daiso/price)로 2차 보완
-    if (!res.selectedProduct.price && res.selectedProduct.id) {
-      try {
-        const priceDetails = await mcp.callTool('get_product_details', {
-          service: 'daiso',
-          operation: 'price',
-          productId: res.selectedProduct.id
-        });
-        const priceVal = priceDetails?.currentPrice || priceDetails?.price;
-        if (priceVal) {
-          res.selectedProduct.price = priceVal;
-        }
-      } catch (e) {
-        console.warn('다이소 get_product_details 가격 조회 생략:', e);
-      }
+  // 후보 상품 목록 (최대 3개 추출)
+  const rawCandidates = (res.productCandidates && res.productCandidates.length > 0)
+    ? res.productCandidates
+    : (res.selectedProduct?.name ? [res.selectedProduct] : (searchProds.length > 0 ? searchProds : []));
+
+  const topCandidates = rawCandidates.slice(0, 3);
+
+  // 2번째, 3번째 상품의 실시간 매장 재고 병렬 조회
+  const otherInvPromises = topCandidates.slice(1).map((cand) => {
+    const candArgs = {
+      service: 'daiso',
+      operation: 'by_id',
+      productId: cand.id,
+      storeQuery: storeQuery
+    };
+    if (geoCoords) {
+      candArgs.latitude = geoCoords.lat;
+      candArgs.longitude = geoCoords.lng;
     }
+    return mcp.callTool('check_inventory', candArgs).catch((e) => {
+      console.warn(`다이소 상품(${cand.name}) 재고 개별 조회 실패:`, e);
+      return null;
+    });
+  });
+
+  const otherInvs = await Promise.allSettled(otherInvPromises);
+
+  // 상위 최대 3개 상품을 통합 정보로 구성
+  res.products = await Promise.all(
+    topCandidates.map(async (cand, idx) => {
+      const pInv = idx === 0
+        ? res
+        : (otherInvs[idx - 1]?.status === 'fulfilled' ? otherInvs[idx - 1].value : null);
+
+      const matchedSearch = searchProds.find((sp) => sp.id === cand.id || sp.name === cand.name);
+      let price = matchedSearch?.price || cand.price || null;
+
+      // 가격이 없으면 get_product_details로 2차 조회 시도 (1번째 상품 위주)
+      if (!price && cand.id && idx === 0) {
+        try {
+          const priceDetails = await mcp.callTool('get_product_details', {
+            service: 'daiso',
+            operation: 'price',
+            productId: cand.id
+          });
+          price = priceDetails?.currentPrice || priceDetails?.price || null;
+        } catch (e) {
+          // fallback
+        }
+      }
+
+      return {
+        id: cand.id,
+        name: cand.name,
+        imageUrl: cand.imageUrl || matchedSearch?.imageUrl || '',
+        price: price,
+        onlineStock: pInv?.onlineStock,
+        stores: pInv?.storeInventory?.stores || []
+      };
+    })
+  );
+
+  // 1번째 상품 정보 유지 (하위 호환성)
+  if (res.products.length > 0) {
+    const first = res.products[0];
+    res.selectedProduct = {
+      id: first.id,
+      name: first.name,
+      imageUrl: first.imageUrl,
+      price: first.price
+    };
+    res.storeInventory = { stores: first.stores };
+    res.onlineStock = first.onlineStock;
   }
 
   return res;
@@ -1097,12 +1156,17 @@ function renderDaisoSection(res) {
     `;
   }
 
-  const summary = res.summary || {};
-  const headline = summary.headline || '';
-  const invSummary = summary.inventorySummary || '';
-  const selectedProduct = res.selectedProduct || {};
-  const stores = res.storeInventory?.stores || [];
-  const onlineStock = res.onlineStock;
+  const products = (res.products && res.products.length > 0)
+    ? res.products
+    : (res.selectedProduct?.name ? [{
+        id: res.selectedProduct.id,
+        name: res.selectedProduct.name,
+        imageUrl: res.selectedProduct.imageUrl,
+        price: res.selectedProduct.price,
+        onlineStock: res.onlineStock,
+        stores: res.storeInventory?.stores || []
+      }] : []);
+
   const matchedKeyword = res.matchedKeyword;
   const originalQuery = res.originalQuery;
 
@@ -1111,9 +1175,9 @@ function renderDaisoSection(res) {
       <div class="flex items-center justify-between pb-3 border-b border-gray-100">
         <div class="flex items-center gap-2">
           <span class="px-2 py-0.5 text-xs font-bold bg-red-500 text-white rounded-md">다이소</span>
-          <span class="text-xs text-gray-500">실시간 재고</span>
+          <span class="text-xs text-gray-500 font-medium">실시간 매장 재고</span>
         </div>
-        ${onlineStock !== undefined ? `<span class="text-xs text-gray-500">온라인 재고: <b class="text-red-500">${onlineStock}</b>개</span>` : ''}
+        <span class="text-xs text-gray-400 font-medium">총 ${products.length}개 상품</span>
       </div>
 
       ${
@@ -1129,70 +1193,85 @@ function renderDaisoSection(res) {
           : ''
       }
 
-      ${
-        selectedProduct.name
-          ? `
-        <div class="my-3 p-3 bg-gradient-to-r from-red-50/40 via-gray-50 to-gray-50 rounded-2xl border border-red-100/70 shadow-xs">
-          <div class="flex items-center gap-3">
-            ${selectedProduct.imageUrl ? `<img src="${selectedProduct.imageUrl}" class="w-16 h-16 object-cover rounded-xl border border-gray-200 shrink-0 shadow-2xs" alt="${escapeHtml(selectedProduct.name)}"/>` : ''}
-            <div class="flex-1 min-w-0">
-              <div class="flex items-start justify-between gap-2">
-                <h4 class="text-sm font-bold text-gray-900 leading-snug line-clamp-2">${escapeHtml(selectedProduct.name)}</h4>
+      <div class="divide-y divide-gray-100">
+        ${
+          products.length === 0
+            ? '<p class="text-xs text-gray-400 py-3 text-center">해당 지역 주변에 확인된 매장 재고가 없습니다.</p>'
+            : products.map((p, idx) => {
+                const stores = p.stores || [];
+                const inStockStores = stores.filter((s) => s.quantity && s.quantity > 0);
+                const priceText = p.price ? `${Number(p.price).toLocaleString()}원` : '';
+                const onlineText = p.onlineStock !== undefined ? `온라인 ${p.onlineStock}개` : '';
+
+                return `
+            <div class="py-3.5 first:pt-3">
+              <!-- 상품 헤더 카드 -->
+              <div class="p-3 bg-gradient-to-r from-red-50/40 via-gray-50 to-gray-50 rounded-2xl border border-red-100/70 shadow-xs mb-2.5">
+                <div class="flex items-center gap-3">
+                  ${p.imageUrl ? `<img src="${p.imageUrl}" class="w-16 h-16 object-cover rounded-xl border border-gray-200 shrink-0 shadow-2xs" alt="${escapeHtml(p.name)}"/>` : ''}
+                  <div class="flex-1 min-w-0">
+                    <div class="flex items-start justify-between gap-2">
+                      <h4 class="text-sm font-bold text-gray-900 leading-snug line-clamp-2">${escapeHtml(p.name)}</h4>
+                      ${
+                        priceText
+                          ? `<span class="shrink-0 text-sm sm:text-base font-black text-red-600 bg-red-50 px-2 py-0.5 rounded-lg border border-red-200/80">${priceText}</span>`
+                          : ''
+                      }
+                    </div>
+                    <div class="flex items-center gap-2 mt-1 text-xs text-gray-500">
+                      ${onlineText ? `<span class="text-gray-500 font-medium">${onlineText}</span>` : ''}
+                      <span class="text-red-500 font-bold">• 주변 ${inStockStores.length}곳 보유</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 인근 매장 재고 리스트 -->
+              <div class="bg-gray-50/80 rounded-xl p-2.5 space-y-1.5 border border-gray-100">
+                <div class="text-[11px] font-semibold text-gray-500 mb-1 flex items-center justify-between">
+                  <span>📍 인근 매장 재고 현황</span>
+                  <span class="text-red-600 font-bold">${inStockStores.length}곳 보유</span>
+                </div>
                 ${
-                  selectedProduct.price
-                    ? `<span class="shrink-0 text-sm sm:text-base font-black text-red-600 bg-red-50 px-2 py-0.5 rounded-lg border border-red-200/80">${Number(selectedProduct.price).toLocaleString()}원</span>`
-                    : ''
+                  stores.length === 0
+                    ? '<p class="text-[11px] text-gray-400 py-1.5 text-center">해당 지역 주변에 확인된 매장 재고가 없습니다.</p>'
+                    : stores.slice(0, 4).map((s) => {
+                        const qty = s.quantity;
+                        const hasStock = qty && qty > 0;
+                        const isZero = qty === 0;
+                        const badgeClass = hasStock
+                          ? 'bg-green-100 text-green-800 border-green-200'
+                          : isZero
+                          ? 'bg-red-100 text-red-700 border-red-200'
+                          : 'bg-gray-100 text-gray-600 border-gray-200';
+                        const badgeText = hasStock ? `재고 ${qty}개` : isZero ? '품절' : '수량 미확인';
+                        const mapUrl = `https://map.kakao.com/link/search/${encodeURIComponent(s.address || s.storeName)}`;
+                        const distText = formatStoreDistance(s, state.geoCoords);
+
+                        return `
+                          <div class="flex items-center justify-between text-xs py-1.5 border-b border-gray-100 last:border-0">
+                            <div class="flex-1 min-w-0 pr-2">
+                              <div class="font-medium text-gray-800 truncate flex items-center gap-1.5">
+                                <span>${escapeHtml(s.storeName)}</span>
+                                ${distText ? `<span class="text-[10px] text-gray-400 font-normal">${distText}</span>` : ''}
+                              </div>
+                              <div class="text-[10px] text-gray-400 truncate">${escapeHtml(s.address || '')}</div>
+                            </div>
+                            <div class="flex items-center gap-2 shrink-0">
+                              <a href="${mapUrl}" target="_blank" class="text-[10px] text-gray-500 hover:text-gray-800 underline">지도</a>
+                              <span class="px-2 py-0.5 text-[10px] font-bold rounded-md border ${badgeClass}">
+                                ${badgeText}
+                              </span>
+                            </div>
+                          </div>
+                        `;
+                      }).join('')
                 }
               </div>
-              <p class="text-xs text-gray-500 mt-1 line-clamp-2 leading-relaxed">${escapeHtml(headline)}</p>
-            </div>
-          </div>
-        </div>
-      `
-          : ''
-      }
-
-      ${invSummary ? `<p class="text-xs text-gray-600 mb-3 px-1">📊 ${invSummary}</p>` : ''}
-
-      <div class="space-y-2 mt-2">
-        ${
-          stores.length === 0
-            ? '<p class="text-xs text-gray-400 py-3 text-center">해당 지역 주변에 확인된 매장 재고가 없습니다.</p>'
-            : stores
-                .map((s) => {
-                  const qty = s.quantity;
-                  const hasStock = qty && qty > 0;
-                  const isZero = qty === 0;
-                  const badgeClass = hasStock
-                    ? 'bg-green-100 text-green-800 border-green-200'
-                    : isZero
-                    ? 'bg-red-100 text-red-700 border-red-200'
-                    : 'bg-gray-100 text-gray-600 border-gray-200';
-                  const badgeText = hasStock ? `재고 ${qty}개` : isZero ? '품절' : '수량 미확인';
-                  const mapUrl = `https://map.kakao.com/link/search/${encodeURIComponent(s.address || s.storeName)}`;
-                  const distText = formatStoreDistance(s, state.geoCoords);
-
-                  return `
-            <div class="p-3 bg-gray-50/70 hover:bg-gray-50 rounded-xl border border-gray-100 flex items-start justify-between gap-2">
-              <div class="flex-1">
-                <div class="flex items-center gap-2">
-                  <span class="font-bold text-sm text-gray-900">${s.storeName}</span>
-                  ${distText ? `<span class="text-xs text-gray-400 font-medium">${distText}</span>` : ''}
-                </div>
-                <p class="text-xs text-gray-500 mt-1 leading-relaxed">${s.address || ''}</p>
-                <div class="flex items-center gap-3 mt-2 text-xs">
-                  ${s.phone ? `<a href="tel:${s.phone}" class="text-blue-600 hover:underline">📞 ${s.phone}</a>` : ''}
-                  <a href="${mapUrl}" target="_blank" class="text-gray-500 hover:text-gray-800 underline">🗺️ 지도/길찾기</a>
-                </div>
-              </div>
-              <span class="px-2.5 py-1 text-xs font-bold rounded-lg border ${badgeClass} shrink-0">
-                ${badgeText}
-              </span>
             </div>
           `;
-                })
-                .join('')
-        }
+        }).join('')
+      }
       </div>
     </div>
   `;

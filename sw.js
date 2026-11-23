@@ -1,5 +1,5 @@
-// sw.js - Service Worker for Retail PWA (v11: Product Price Display & Enrichment)
-const CACHE_NAME = 'retail-pwa-v11';
+// sw.js - Service Worker for Retail PWA (v12: Multi-Product 3-Item Display)
+const CACHE_NAME = 'retail-pwa-v12';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
